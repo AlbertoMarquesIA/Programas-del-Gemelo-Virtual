@@ -1,0 +1,262 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.3">
+  <POU Name="Fagor_ServidorLocalTCP" Id="{fde32bf7-e8b9-431f-b700-f2fb2d96c66e}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK Fagor_ServidorLocalTCP
+VAR_INPUT
+	sLocalHost					: STRING(15); 	// Aqui se pondra la propia IP del Beckhoff, (la de la boca que este conectada al switch/ethernet*)
+	nLocalPort					: UDINT;		// El puerto a utilizar es libre siendo siempre >200 y evitando si es posible usar el 801 que es el de por defecto de programacion
+	bEnable						: BOOL;			// NOTA: Tener en cuenta los FIREWALL
+	bReset						: BOOL; 		// Inlcuido JAVI 2020_04_02
+	bLogON						: bool;			// Mostrar/Ocultar mensajes de debug en consola
+END_VAR
+VAR_OUTPUT
+	bListening					: BOOL;
+	hListener 					: T_HSOCKET;
+	nAcceptedClients			: UDINT;
+	bBusy						: BOOL;
+	bError 						: BOOL;
+	nErrId						: UDINT;
+END_VAR
+VAR
+	fbListen	 				: FB_SocketListen := ( sSrvNetID := '', tTimeout := DEFAULT_ADS_TIMEOUT );
+	fbClose						: FB_SocketClose := ( sSrvNetID := '', tTimeout := DEFAULT_ADS_TIMEOUT );
+	fbConnectTON				: TON := ( PT := T#3S );
+	eStep						: E_ServerSteps;
+	fbRemoteClient				: ARRAY[1..MAX_CLIENT_CONNECTIONS ] OF FB_RemoteClient;
+	i							: UDINT;
+	
+	iError_Internal				: UINT;
+	bFlags						: BYTE;
+	
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[CASE eStep OF
+
+	SERVER_STATE_IDLE:
+		IF bEnable THEN
+			IF NOT bReset THEN
+				bBusy := TRUE;
+				bError := FALSE;
+				nErrId := 0;
+				iError_Internal := 0;
+	
+				fbConnectTON( IN := FALSE );
+				eStep := SERVER_STATE_LISTENER_OPEN_START;
+				bFlags := 0;
+			END_IF
+		ELSE
+			bBusy := FALSE;
+			bError := bError;
+			nErrId := nErrId;
+			iError_Internal := 0;
+		END_IF
+		
+	//Primero hay que generar un handle del LISTEN
+	SERVER_STATE_LISTENER_OPEN_START: 	
+		fbConnectTON( IN := TRUE, PT := T#0S );
+		IF fbConnectTON.Q THEN
+			fbConnectTON( IN := FALSE );
+			fbListen( 	bExecute := FALSE  );
+			fbListen(	sLocalHost	:= sLocalHost,	//Esta es la direccion IP local (servidor)
+						nLocalPort	:= nLocalPort,  //Este es el puerto local (servidor)
+						bExecute	:= TRUE 		//EJECUTAMOS el Listen
+					);
+			LogMessage( '1) Fagor_ServidorLocalTCP : >1 FB_SocketListen ... ', hListener );
+			eStep := SERVER_STATE_LISTENER_OPEN_WAIT;
+		END_IF
+
+	SERVER_STATE_LISTENER_OPEN_WAIT:
+		fbListen( bExecute := FALSE );
+		IF NOT fbListen.bBusy THEN
+			IF NOT fbListen.bError THEN
+				bListening 	:= TRUE;
+				hListener 	:= fbListen.hListener;
+				LogMessage( '1) Fagor_ServidorLocalTCP :    . LISTENING OK (HANDLE = ', hListener );
+				eStep 		:= SERVER_STATE_REMOTE_CLIENTS_COMM;
+			ELSE
+				LogError( '1) Fagor_ServidorLocalTCP :    . LISTENING ERROR !! (errorID = ',  fbListen.nErrId );
+				nErrId := fbListen.nErrId;
+				iError_Internal := 1;			//1 - Error en la funcion FB_Listen. Buscar nErrId en ayuda de Beckhoff
+				eStep := SERVER_STATE_ERROR;
+			END_IF
+		END_IF
+
+	//Listening hecho correctamente -> Aceptamos clientes ... (permancemos en este estado)
+	SERVER_STATE_REMOTE_CLIENTS_COMM:
+		IF bFlags.0 = FALSE THEN
+			bFlags.0 := TRUE;
+			LogMessage('1) Fagor_ServidorLocalTCP : >2 FB_RemoteClient ...', hListener);
+		END_IF
+
+		nAcceptedClients := 0;
+		
+		i := 1;	//Modificado para solamente 1 cliente			
+		//Le paso el propio enable de la entrada de esta misma funcion para que quite el .busy en caso de deshabilitar la comunicacion.
+		fbRemoteClient[ i ]( 
+							hListener := hListener 
+							,bEnable  := bEnable
+							,bReset   := bReset
+							);
+		
+		//ERROR
+		IF NOT fbRemoteClient[ 1 ].bBusy THEN
+			IF fbRemoteClient[ 1 ].bError THEN
+				//eStep := SERVER_STATE_REMOTE_CLIENTS_CLOSE;
+				IF bFlags.2 = FALSE THEN
+					bFlags.2 := TRUE;
+					LogMessage('1) Fagor_ServidorLocalTCP :    . ERROR !! : Error en FB_RemoteClient', hListener);
+				END_IF
+			END_IF
+		END_IF
+
+		//OK
+		IF fbRemoteClient[ 1 ].bAccepted THEN
+			nAcceptedClients := 1;
+			IF bFlags.1 = FALSE THEN
+				bFlags.1 := TRUE;
+				LogMessage(' 1) Fagor_ServidorLocalTCP :    . OK -> FB_REMOTECLIENT', hListener);
+			END_IF
+		END_IF
+
+		//Si cae la senal de ENABLE en algun momento, vamos a cerrar el listener, esperando siempre antes a que acabe FB_RemoteClient...
+		IF bEnable = FALSE THEN	
+			IF fbRemoteClient[1].bBusy = FALSE THEN
+				eStep := SERVER_STATE_REMOTE_CLIENTS_CLOSE;
+			END_IF	
+		END_IF
+
+	SERVER_STATE_REMOTE_CLIENTS_CLOSE:
+		nAcceptedClients := 0;
+		eStep := SERVER_STATE_LISTENER_CLOSE_START;
+		i := 1;
+
+	SERVER_STATE_LISTENER_CLOSE_START:
+		fbClose( 	bExecute := FALSE );
+		fbClose(	hSocket	:= hListener
+					,bExecute:= TRUE 
+					);
+		LogMessage( '1) Fagor_ServidorLocalTCP : >3 FB_SocketClose ...', hListener );
+		eStep := SERVER_STATE_LISTENER_CLOSE_WAIT;
+
+	SERVER_STATE_LISTENER_CLOSE_WAIT:
+		fbClose( bExecute := FALSE );
+		IF NOT fbClose.bBusy THEN
+			
+			IF fbClose.bError THEN
+				LogError( '1) Fagor_ServidorLocalTCP :    FB_SocketClose . ERROR !!! .errorID=',  fbClose.nErrId );
+				nErrId := fbClose.nErrId;
+				bError := TRUE;
+				iError_Internal := 2;	//2 - FB_SocketClose Error. Ver error nErrId y consultar en la ayuda de FB_SocketCLose
+				eStep := SERVER_STATE_ERROR;
+			ELSE
+				LogMessage( '1) Fagor_ServidorLocalTCP :    FB_SocketClose . OK', hListener );
+				bListening := FALSE;
+				MEMSET( ADR(hListener), 0, SIZEOF(hListener));				
+				bBusy := FALSE;
+				bError := FALSE;
+				nErrId := 0;
+				eStep := SERVER_STATE_IDLE;
+			END_IF
+		END_IF
+
+	SERVER_STATE_ERROR:
+		bError := TRUE;
+		nErrId := nErrId;
+		iError_Internal := iError_Internal;
+		CASE iError_Internal OF
+			1:
+				IF bFlags.2 = FALSE THEN
+					LogError( '1) FB_Listen ERROR. Buscar nErrId en ayuda', 0 );
+					bFlags.2 := TRUE;
+				END_IF
+			2:
+				IF bFlags.3 = FALSE THEN
+					LogError( '1) FB_SocketClose ERROR. Buscar nErrId en la ayuda', 0 );
+					bFlags.3 := TRUE;
+				END_IF
+		END_CASE
+		IF bReset OR bEnable = FALSE THEN	//Incluido por mi 2020_04_02
+			eStep := SERVER_STATE_IDLE;
+			bBusy := FALSE;
+			bFlags := 0;
+		END_IF
+
+END_CASE]]></ST>
+    </Implementation>
+    <LineIds Name="Fagor_ServidorLocalTCP">
+      <LineId Id="30" Count="3" />
+      <LineId Id="399" Count="0" />
+      <LineId Id="34" Count="2" />
+      <LineId Id="429" Count="0" />
+      <LineId Id="391" Count="0" />
+      <LineId Id="38" Count="1" />
+      <LineId Id="268" Count="0" />
+      <LineId Id="390" Count="0" />
+      <LineId Id="400" Count="3" />
+      <LineId Id="428" Count="0" />
+      <LineId Id="45" Count="0" />
+      <LineId Id="215" Count="0" />
+      <LineId Id="46" Count="8" />
+      <LineId Id="164" Count="0" />
+      <LineId Id="234" Count="0" />
+      <LineId Id="362" Count="0" />
+      <LineId Id="56" Count="7" />
+      <LineId Id="65" Count="0" />
+      <LineId Id="258" Count="0" />
+      <LineId Id="66" Count="2" />
+      <LineId Id="427" Count="0" />
+      <LineId Id="69" Count="2" />
+      <LineId Id="404" Count="0" />
+      <LineId Id="72" Count="1" />
+      <LineId Id="481" Count="4" />
+      <LineId Id="75" Count="0" />
+      <LineId Id="363" Count="0" />
+      <LineId Id="77" Count="0" />
+      <LineId Id="187" Count="0" />
+      <LineId Id="80" Count="0" />
+      <LineId Id="259" Count="5" />
+      <LineId Id="81" Count="0" />
+      <LineId Id="407" Count="0" />
+      <LineId Id="82" Count="0" />
+      <LineId Id="410" Count="1" />
+      <LineId Id="413" Count="0" />
+      <LineId Id="412" Count="0" />
+      <LineId Id="408" Count="1" />
+      <LineId Id="265" Count="0" />
+      <LineId Id="85" Count="0" />
+      <LineId Id="87" Count="1" />
+      <LineId Id="269" Count="1" />
+      <LineId Id="272" Count="0" />
+      <LineId Id="271" Count="0" />
+      <LineId Id="89" Count="0" />
+      <LineId Id="232" Count="0" />
+      <LineId Id="90" Count="0" />
+      <LineId Id="227" Count="4" />
+      <LineId Id="92" Count="4" />
+      <LineId Id="108" Count="4" />
+      <LineId Id="298" Count="1" />
+      <LineId Id="113" Count="4" />
+      <LineId Id="120" Count="3" />
+      <LineId Id="421" Count="0" />
+      <LineId Id="430" Count="0" />
+      <LineId Id="124" Count="1" />
+      <LineId Id="419" Count="1" />
+      <LineId Id="126" Count="0" />
+      <LineId Id="418" Count="0" />
+      <LineId Id="127" Count="7" />
+      <LineId Id="322" Count="0" />
+      <LineId Id="423" Count="2" />
+      <LineId Id="432" Count="0" />
+      <LineId Id="435" Count="0" />
+      <LineId Id="433" Count="1" />
+      <LineId Id="442" Count="2" />
+      <LineId Id="446" Count="0" />
+      <LineId Id="445" Count="0" />
+      <LineId Id="426" Count="0" />
+      <LineId Id="486" Count="4" />
+      <LineId Id="141" Count="0" />
+      <LineId Id="9" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

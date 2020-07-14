@@ -1,0 +1,343 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.3">
+  <POU Name="FB_RemoteClient" Id="{7fcfde08-3a3e-4f70-ab8e-7fe16f9be33a}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK FB_RemoteClient
+(*
+Una vez creado exitosamente el handle del Listener hacemos esta funcion para la aceptacion de clientes remotos
+Deberemos estar ejecutando esta funcion y en concreto FB_SocketAccept antes de llamar a las 2 funciones que se llaman en Simotion.
+
+Autor: Fagor Arrasate K.E.
+Date: 2015-9-11
+*)
+VAR_INPUT
+	hListener				: T_HSOCKET;
+	bEnable 				: BOOL;
+	bReset					: BOOL;	//Incluido por JAVI 2020_04_02
+END_VAR
+VAR_OUTPUT
+	bAccepted			: BOOL;
+	hSocket				: T_HSOCKET;
+	bBusy				: BOOL;
+	bError 				: BOOL;
+	nErrID				: UDINT;
+	sFromClient			: T_MaxString;
+END_VAR
+VAR
+	fbAccept 			: FB_SocketAccept := ( sSrvNetID := '', tTimeout := DEFAULT_ADS_TIMEOUT );
+	fbClose				: FB_SocketClose := ( sSrvNetID := '', tTimeout := DEFAULT_ADS_TIMEOUT );
+	fbServerDataExcha	: FB_ServerDataExcha;
+	fbAcceptTON			: TON := ( PT := PLCPRJ_ACCEPT_POLLING_TIME );
+	eStep				: E_ClientSteps;
+	bFlags				: BYTE;
+	fbTimeout01			: TON;
+	nErrod_Internal		: UINT;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[CASE eStep OF
+
+	CLIENT_STATE_IDLE:
+		bFlags := 0;
+		IF bEnable THEN
+			IF NOT bReset THEN
+				bBusy := TRUE;
+				bError := FALSE;
+				nErrId := 0;
+				fbAcceptTON( IN := FALSE );
+				eStep := CLIENT_STATE_CONNECT_START;
+			END_IF
+		ELSE
+			IF bError THEN
+				eStep := CLIENT_STATE_ERROR;
+			ELSE
+				bBusy := FALSE;
+			END_IF
+		END_IF
+
+	CLIENT_STATE_CONNECT_START:
+		fbAcceptTON( IN := TRUE, PT := T#0S);
+		IF fbAcceptTON.Q THEN
+			fbAcceptTON( IN := FALSE );
+			fbAccept(  	bExecute := FALSE  );
+			fbAccept(	hListener := hListener
+						,bExecute := TRUE 
+						);
+						
+			eStep := CLIENT_STATE_CONNECT_WAIT;
+			LogMessage(' 2) FB_RemoteClient : >1 FB_SocketAccept ... ', hListener);
+		END_IF
+
+	CLIENT_STATE_CONNECT_WAIT:
+		fbAccept( bExecute := FALSE );
+		IF NOT fbAccept.bBusy THEN
+			IF NOT fbAccept.bError THEN
+				IF fbAccept.bAccepted THEN
+					bAccepted := TRUE;
+					hSocket := fbAccept.hSocket;
+					LogMessage( ' 2) FB_RemoteClient :    FB_SocketAccept . ACEPTADO => Handle del Socket = ', hSocket );
+					fbServerDataExcha( bExecute := FALSE );
+					eStep := CLIENT_STATE_DATAEXCHA_START;
+				ELSE
+					//Si aun no ha aceptado el clientre hacemos otra llamada a fbAccept
+					fbAccept(bExecute := TRUE );
+				END_IF
+			ELSE
+				//LogError( 'FB_SocketAccept',  fbAccept.nErrId );
+				LogError( ' 2)  FB_RemoteClient :    FB_SocketAccept . ERROR!! .errorID=', fbAccept.nErrId );
+				nErrId := fbAccept.nErrId;
+				eStep := CLIENT_STATE_ERROR;
+				nErrod_Internal := 1;	//1 - Error en FB_Accept. Mirar error id.
+				RETURN;
+			END_IF
+		END_IF
+		IF bEnable = FALSE THEN
+			IF fbAccept.bAccepted OR bAccepted THEN 
+				eStep := CLIENT_STATE_CLOSE_START;
+				LogMessage( ' 2) FB_RemoteClient :    FB_SocketAccept . ACEPTADO => ABORTADO MANUAL', hSocket );
+			ELSE
+				eStep := CLIENT_STATE_IDLE;
+			END_IF	
+		END_IF
+
+	CLIENT_STATE_DATAEXCHA_START:
+		fbServerDataExcha	( hSocket := hSocket
+						 	,bExecute := TRUE 
+							);
+		LogMessage( ' 2) FB_RemoteClient : >2 FB_ServerDataExcha ... ', hSocket );
+		eStep := CLIENT_STATE_DATAEXCHA_WAIT;
+		
+		IF bEnable = FALSE THEN
+			IF fbServerDataExcha.bBusy = FALSE THEN
+				eStep := CLIENT_STATE_CLOSE_START;
+			END_IF;
+		END_IF
+		
+		(*IF NOT fbServerDataExcha.bBusy AND fbServerDataExcha.bError = TRUE THEN
+			LogError( '2)  FB_RemoteClient :    . ERROR!! .errorID=', fbServerDataExcha.nErrId );
+			nErrId := fbServerDataExcha.nErrID;
+			//eStep := CLIENT_STATE_ERROR;
+		END_IF*)
+
+	CLIENT_STATE_DATAEXCHA_WAIT:
+		//Nos quedamos ejecutando esta secuencia hasta que ServerDataExcha pierda el bit de BUSY o salte un ERROR
+		
+		fbServerDataExcha( bExecute := bEnable
+						   ,sFromClient => sFromClient
+						   ,bReset := bReset
+						   );
+		IF bFlags.0 = FALSE THEN
+			LogMessage( ' 2) FB_RemoteClient :    . Intercambiando datos ... (FB_ServerDataExcha)', hSocket );
+			bFlags.0 := TRUE;
+		END_IF
+		
+		IF NOT fbServerDataExcha.bBusy THEN
+			IF NOT fbServerDataExcha.bError THEN
+				IF bFlags.1 = FALSE THEN
+					LogMessage( ' 2) FB_RemoteClient :    . OK (DataExcha TERMINADO)', hSocket );
+					bFlags.1 := TRUE;
+				END_IF
+			END_IF
+		END_IF
+		
+		IF bEnable = FALSE THEN
+			IF fbServerDataExcha.bBusy = FALSE THEN
+				eStep := CLIENT_STATE_CLOSE_START;
+				bFlags := 0;
+			END_IF;
+		END_IF
+		
+	CLIENT_STATE_CLOSE_START:
+		fbClose( 	bExecute := FALSE );
+		fbClose(	hSocket:= hSocket
+					,bExecute:= TRUE 
+					);
+		LogMessage( ' 2) FB_RemoteClient : >3 FB_SocketClose ... ', hSocket );
+		fbTimeout01 ( IN:= FALSE, PT := T#3S );	//Timeout de 3 segundos de espera para esperar al cierre del socket ...
+		eStep := CLIENT_STATE_CLOSE_WAIT;
+
+	CLIENT_STATE_CLOSE_WAIT:
+		fbClose( bExecute := FALSE );
+		fbTimeout01( IN := TRUE );	//Iniciamos el contador de timeout
+		IF NOT fbClose.bBusy THEN
+			bAccepted := FALSE;
+			MEMSET( ADR( hSocket ), 0, SIZEOF( hSocket ) );
+			IF fbClose.bError THEN
+				LogError( ' 2) FB_RemoteClient :     FB_SocketClose . ERROR!! .errorID=', fbClose.nErrId );
+				nErrId := fbClose.nErrId;
+				nErrod_Internal := 2; //2 - Error en FB_SocketCLose. Ver errorID correspondiente
+				eStep := CLIENT_STATE_ERROR;
+			ELSE
+				LogMessage( ' 2) FB_RemoteClient :    . CERRADO OK', hSocket );
+				bBusy := FALSE;
+				bError := FALSE;
+				nErrId := 0;
+				eStep := CLIENT_STATE_IDLE;
+			END_IF
+		END_IF
+		
+		IF bEnable = FALSE AND fbClose.bBusy THEN	//Si forzamos el desconectado y estabamos intentando desconectar
+			IF bFlags.1 := FALSE THEN
+				LogMessage( ' 2) FB_RemoteClient :    . AVISO !! Intento de cerrar socket y Enable=FALSE', hSocket );
+				LogMessage( ' 2) FB_RemoteClient :    			espera al timeout de fbClose ...', hSocket );
+				bFlags.1 := TRUE;
+			END_IF	
+		END_IF
+		
+		IF fbTimeout01.Q THEN	//Error de Timeout en cierre del socket
+			LogError( ' 2) FB_RemoteClient :    . TIMEOUT ERROR!! .errorID=', 3000 );
+			nErrId := 3000;
+			nErrod_Internal := 3; //3 - Error en FB_SocketCLose. TIMEOUT.
+			eStep := CLIENT_STATE_ERROR;
+		END_IF
+
+	//ERROR: Dejamos bloqueado aqui el programa hasta que se pulse reset
+	CLIENT_STATE_ERROR:
+		//ERROR LIST//
+		//ERROR ID : 3000 Ha tardado mucho en cerrarse el socket (FB_SocketClose)
+		//////////////
+		bBusy := TRUE;
+		bError := TRUE;
+		nErrID := nErrID;		
+		CASE nErrod_Internal OF
+			1:
+				IF bFlags.2 = FALSE THEN
+					LogError( ' 1 - Error en FB_Accept. Ver ErrorID.', nErrID );
+					bFlags.2 := TRUE;
+				END_IF				
+			2:
+				IF bFlags.2 = FALSE THEN
+					LogError( ' 2 - Error en FB_SocketCLose. Ver errorID.', nErrID );
+					bFlags.2 := TRUE;
+				END_IF				
+			3:
+				IF bFlags.2 = FALSE THEN
+					LogError( ' 3 - Error en FB_SocketCLose. TIMEOUT.', 0 );
+					bFlags.2 := TRUE;
+				END_IF				
+		END_CASE
+		IF bReset OR bEnable = FALSE THEN 
+			eStep := CLIENT_STATE_IDLE;
+			bBusy := FALSE;
+			bError := FALSE;
+			bFlags := 0;
+		END_IF			
+
+END_CASE]]></ST>
+    </Implementation>
+    <LineIds Name="FB_RemoteClient">
+      <LineId Id="36" Count="2" />
+      <LineId Id="557" Count="0" />
+      <LineId Id="39" Count="0" />
+      <LineId Id="512" Count="0" />
+      <LineId Id="40" Count="2" />
+      <LineId Id="45" Count="1" />
+      <LineId Id="54" Count="0" />
+      <LineId Id="551" Count="2" />
+      <LineId Id="555" Count="1" />
+      <LineId Id="554" Count="0" />
+      <LineId Id="513" Count="0" />
+      <LineId Id="55" Count="7" />
+      <LineId Id="317" Count="0" />
+      <LineId Id="316" Count="0" />
+      <LineId Id="63" Count="0" />
+      <LineId Id="162" Count="0" />
+      <LineId Id="64" Count="9" />
+      <LineId Id="214" Count="0" />
+      <LineId Id="192" Count="0" />
+      <LineId Id="194" Count="0" />
+      <LineId Id="515" Count="1" />
+      <LineId Id="74" Count="0" />
+      <LineId Id="76" Count="1" />
+      <LineId Id="161" Count="0" />
+      <LineId Id="78" Count="1" />
+      <LineId Id="518" Count="1" />
+      <LineId Id="80" Count="1" />
+      <LineId Id="205" Count="0" />
+      <LineId Id="208" Count="0" />
+      <LineId Id="206" Count="0" />
+      <LineId Id="558" Count="0" />
+      <LineId Id="212" Count="1" />
+      <LineId Id="210" Count="0" />
+      <LineId Id="207" Count="0" />
+      <LineId Id="82" Count="1" />
+      <LineId Id="85" Count="1" />
+      <LineId Id="364" Count="0" />
+      <LineId Id="243" Count="0" />
+      <LineId Id="87" Count="0" />
+      <LineId Id="358" Count="0" />
+      <LineId Id="195" Count="0" />
+      <LineId Id="199" Count="0" />
+      <LineId Id="196" Count="0" />
+      <LineId Id="200" Count="0" />
+      <LineId Id="197" Count="0" />
+      <LineId Id="359" Count="1" />
+      <LineId Id="363" Count="0" />
+      <LineId Id="372" Count="0" />
+      <LineId Id="361" Count="1" />
+      <LineId Id="88" Count="1" />
+      <LineId Id="474" Count="1" />
+      <LineId Id="90" Count="0" />
+      <LineId Id="438" Count="0" />
+      <LineId Id="473" Count="0" />
+      <LineId Id="439" Count="0" />
+      <LineId Id="476" Count="2" />
+      <LineId Id="437" Count="0" />
+      <LineId Id="479" Count="0" />
+      <LineId Id="91" Count="1" />
+      <LineId Id="349" Count="2" />
+      <LineId Id="94" Count="0" />
+      <LineId Id="98" Count="1" />
+      <LineId Id="357" Count="0" />
+      <LineId Id="353" Count="2" />
+      <LineId Id="374" Count="0" />
+      <LineId Id="356" Count="0" />
+      <LineId Id="100" Count="0" />
+      <LineId Id="365" Count="0" />
+      <LineId Id="101" Count="3" />
+      <LineId Id="375" Count="0" />
+      <LineId Id="164" Count="0" />
+      <LineId Id="390" Count="0" />
+      <LineId Id="105" Count="3" />
+      <LineId Id="393" Count="0" />
+      <LineId Id="109" Count="0" />
+      <LineId Id="111" Count="4" />
+      <LineId Id="559" Count="0" />
+      <LineId Id="116" Count="1" />
+      <LineId Id="310" Count="0" />
+      <LineId Id="118" Count="5" />
+      <LineId Id="376" Count="0" />
+      <LineId Id="378" Count="0" />
+      <LineId Id="384" Count="0" />
+      <LineId Id="388" Count="0" />
+      <LineId Id="379" Count="0" />
+      <LineId Id="383" Count="0" />
+      <LineId Id="386" Count="0" />
+      <LineId Id="377" Count="0" />
+      <LineId Id="391" Count="1" />
+      <LineId Id="396" Count="0" />
+      <LineId Id="400" Count="0" />
+      <LineId Id="560" Count="0" />
+      <LineId Id="398" Count="0" />
+      <LineId Id="395" Count="0" />
+      <LineId Id="312" Count="0" />
+      <LineId Id="124" Count="1" />
+      <LineId Id="434" Count="0" />
+      <LineId Id="436" Count="0" />
+      <LineId Id="435" Count="0" />
+      <LineId Id="604" Count="0" />
+      <LineId Id="576" Count="0" />
+      <LineId Id="575" Count="0" />
+      <LineId Id="561" Count="1" />
+      <LineId Id="572" Count="2" />
+      <LineId Id="567" Count="0" />
+      <LineId Id="564" Count="0" />
+      <LineId Id="577" Count="3" />
+      <LineId Id="565" Count="0" />
+      <LineId Id="586" Count="3" />
+      <LineId Id="563" Count="0" />
+      <LineId Id="598" Count="5" />
+      <LineId Id="133" Count="0" />
+      <LineId Id="9" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

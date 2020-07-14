@@ -1,0 +1,35 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.3">
+  <POU Name="LogError" Id="{5e2b5ed4-d4c1-45fa-b71f-c8e5afb396d4}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION LogError : DINT
+VAR_INPUT
+	msg			: STRING;
+	nErrId		: DWORD;
+END_VAR
+VAR
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[IF GVL_TCP.G_bLogDebugMessages OR GVL_TCP.G_bLogErrorMessages THEN
+	IF nErrId = 0 THEN
+		LogError := ADSLOGSTR( ADSLOG_MSGTYPE_HINT OR ADSLOG_MSGTYPE_LOG, CONCAT( msg, ':No error!   %s'),'' );
+	ELSIF ( nErrId AND 16#80000000) =16#80000000 THEN
+		LogError := ADSLOGDINT( ADSLOG_MSGTYPE_ERROR OR ADSLOG_MSGTYPE_LOG, CONCAT( msg, ': Win32 error: %d' ), DWORD_TO_DINT(SCODE_CODE( nErrId )) );
+	ELSIF (nErrId AND 16#00008100) =16#00008100 THEN
+		LogError := ADSLOGDINT( ADSLOG_MSGTYPE_ERROR OR ADSLOG_MSGTYPE_LOG, CONCAT( msg, ':Internal PLC sample project error: %d' ), DWORD_TO_DINT(nErrId) );
+	ELSIF (nErrId AND 16#00008000) =16#00008000 THEN
+		LogError := ADSLOGDINT( ADSLOG_MSGTYPE_ERROR OR ADSLOG_MSGTYPE_LOG, CONCAT( msg, ':Internal TCP/IP Connection Server error: %d' ), DWORD_TO_DINT(nErrId) );
+	ELSE
+		LogError := ADSLOGDINT( ADSLOG_MSGTYPE_ERROR OR ADSLOG_MSGTYPE_LOG, CONCAT( msg, ':TwinCAT System error: %d' ), DWORD_TO_DINT(nErrId) );
+	END_IF
+ELSE
+	LogError := 0;
+END_IF]]></ST>
+    </Implementation>
+    <LineIds Name="LogError">
+      <LineId Id="30" Count="0" />
+      <LineId Id="14" Count="9" />
+      <LineId Id="7" Count="0" />
+      <LineId Id="31" Count="2" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

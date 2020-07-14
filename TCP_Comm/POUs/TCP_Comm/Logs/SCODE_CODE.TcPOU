@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.3">
+  <POU Name="SCODE_CODE" Id="{986bae42-870a-484f-aa1f-b286e8d4d4c1}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION SCODE_CODE : DWORD
+VAR_INPUT
+	sc		: DWORD;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[SCODE_CODE := 16#FFFF AND sc;]]></ST>
+    </Implementation>
+    <LineIds Name="SCODE_CODE">
+      <LineId Id="7" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

@@ -1,0 +1,291 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.3">
+  <POU Name="FB_ServerDataExcha" Id="{53edc858-088b-4609-bac8-bd50d0aad83d}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK FB_ServerDataExcha
+(*
+Una vez creado (hListen) y aceptado (hSocket) el cliente remoto, se pocedera a envio y recepcion de datos.
+Esta funcion se encarga de recibir y procesar esos datos
+*)
+VAR_INPUT
+	hSocket			: T_HSOCKET;
+	bExecute		: BOOL;
+	bReset			: bool;
+END_VAR
+VAR_OUTPUT
+	bBusy			: BOOL;
+	bError 			: BOOL;
+	nErrID			: UDINT;
+	sFromClient		: T_MaxString;
+END_VAR
+VAR
+	fbSocketReceive	: FB_SocketReceive := ( sSrvNetId := '', tTimeout := DEFAULT_ADS_TIMEOUT );
+	fbSocketSend	: FB_SocketSend :=  ( sSrvNetId := '', tTimeout := DEFAULT_ADS_TIMEOUT );
+	eStep			: E_DataExchaSteps;
+	RisingEdge		: R_TRIG;
+	fbReceiveTON	: TON;
+	fbDisconnectTON : TON;
+	
+	cbReceived 		: UDINT;	
+	rxBuffer		: ARRAY [0..MAX_PLCPRJ_RXBUFFER_SIZE-1] OF BYTE;
+
+	txBuffer		: ARRAY [0..MAX_PLCPRJ_TXBUFFER_SIZE-1] OF BYTE;
+
+	bFlags			: BYTE;
+	a	 			: INT;
+	udErrId_Intern	: UINT;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[RisingEdge( CLK := bExecute );
+IF RisingEdge.Q THEN 	(*En cuanto detectamos un flanco ascendente es que hemos aceptado una conexion y procedemos a la repecion de datos a traves de ella*)
+	bBusy 	:= TRUE;
+	bError 	:= FALSE;
+	nErrId 	:= 0;
+	fbDisconnectTON( IN := FALSE, PT := T#0s );	(* disable timeout check first *)
+	fbReceiveTON( IN := FALSE, PT := T#0S ); 	(* receive first request immediately *)
+	bFlags := 0;
+	eStep 	:= DATAEXCHA_STATE_RECEIVE_START;
+	LogMessage( concat('  3) FB_ServerDataExcha : >1 INICIO INTERCAMBIO DE DATOS : ',BYTE_TO_STRING(rxBuffer[0])), hSocket );
+END_IF
+
+CASE eStep OF
+	DATAEXCHA_STATE_IDLE:
+		bBusy  := FALSE;
+		bError := FALSE;
+		bFlags := 0;
+
+	DATAEXCHA_STATE_RECEIVE_START: // Preparacion para recepcion de datos del cliente
+		fbReceiveTON(  IN := TRUE );
+		IF fbReceiveTON.Q THEN
+			fbReceiveTON( IN := FALSE );
+			fbSocketReceive( bExecute := FALSE );
+
+			fbSocketReceive( 
+							 hSocket	:= hSocket
+							 ,pDest		:= ADR( rxBuffer )
+							 ,cbLen		:= SIZEOF( rxBuffer )
+							 ,bExecute	:= TRUE 
+						   );
+			LogMessage( '  3) FB_ServerDataExcha : >2 RECIBIENDO DATOS : FB_SocketReceive ... ', hSocket );
+			eStep := DATAEXCHA_STATE_RECEIVE_WAIT;
+		END_IF
+
+	DATAEXCHA_STATE_RECEIVE_WAIT:	//Esperamos a la recepcion de datos
+		fbSocketReceive( bExecute := FALSE );
+		IF NOT fbSocketReceive.bBusy THEN
+			IF NOT fbSocketReceive.bError THEN
+				IF (fbSocketReceive.nRecBytes > 0) THEN	// Si hemos recibido algun/os dato/s
+					
+					IF bFlags.0 = FALSE THEN
+						LogMessage( concat('  3) FB_ServerDataExcha :    . RECIBIENDO DATOS ',UDINT_TO_STRING(fbSocketReceive.nRecBytes)), hSocket );
+						bFlags.0 := TRUE;
+					END_IF
+					LogMessage( concat('    . RECIBIDOS : ',UDINT_TO_STRING(fbSocketReceive.nRecBytes)), hSocket );
+					LogMessage( concat('    . TOTALES = ',UDINT_TO_STRING(cbReceived)), hSocket );
+					
+					cbReceived 		:= cbReceived + fbSocketReceive.nRecBytes;		(* calculate the number of received data bytes *) //vamos acumulando lo que vamos recibiendo
+
+					IF cbReceived < INT_TO_UDINT(MAX_PLCPRJ_RXBUFFER_SIZE) THEN		(* mientras sigamos recibiendo datos *)
+						//LogMessage( '   							 . quedan DATOS por recibir ', hSocket );
+						fbReceiveTON( IN := FALSE, PT := T#0s ); 							(* bytes received => increase the read (polling) speed *)(*esto no sirve para nada*)
+						fbDisconnectTON( IN := FALSE, PT := PLCPRJ_RECEIVE_TIMEOUT );		(* bytes received => disable timeout check *)(*idem*)
+					
+					//Cuando los datos recibidos sean >= MAX_PLCPRJ_RXBUFFER_SIZE
+					ELSE	
+						FOR a:=0 TO MAX_PLCPRJ_RXBUFFER_SIZE-1 DO
+							GR55_dataRCV[a] := rxBuffer[a];
+						END_FOR
+						
+						LogMessage( concat('    . TODOS los DATOS recibidos !: ',UDINT_TO_STRING(cbReceived)), hSocket );
+						cbReceived := 0;
+						//bBusy 	:= FALSE;
+
+						//Si estamos aqui es que TODOS los datos han sido recibidos*)
+						
+						LogMessage( CONCAT('    . [0] = ', BYTE_TO_STRING(rxBuffer[0])), hSocket);
+						LogMessage( CONCAT('    . [1] = ', BYTE_TO_STRING(rxBuffer[1])), hSocket);
+						LogMessage( CONCAT('    . [2] = ', BYTE_TO_STRING(rxBuffer[2])), hSocket);
+						LogMessage( CONCAT('    . [3] = ', BYTE_TO_STRING(rxBuffer[3])), hSocket);
+						
+						//Una vez tenemos todos los datos, nos toca enviar los nuestros 
+						eStep := DATAEXCHA_STATE_SEND_START;
+						bFlags.0 := FALSE;
+						bFlags.1 := FALSE;
+						//eStep := DATAEXCHA_STATE_RECEIVE_START;
+					END_IF
+
+				ELSE	//Si no hemos recibido ningun dato *)
+					IF bFlags.1 = FALSE THEN
+						LogMessage( '    . ESPERANDO RECIBIR DATOS ... ', hSocket);
+						bFlags.1 := TRUE;
+					END_IF
+					IF bExecute = FALSE THEN
+						eStep := DATAEXCHA_STATE_IDLE;
+						RETURN;
+					END_IF
+					fbSocketReceive( bExecute := TRUE );
+				END_IF
+
+			ELSE(* receive error / o corta la comunicacion el cliente*)
+				LogError( '  3) FB_ServerDataExcha :    . ERROR Cliente DESCONECTADO',  fbSocketReceive.nErrId );
+				nErrId := fbSocketReceive.nErrId;
+				udErrId_Intern := 1;	//1 - Cliente ha desconectado. Ver error id. FB_SocketReceive
+				eStep := DATAEXCHA_STATE_ERROR;
+			END_IF
+		ELSE
+			LogMessage( '  3) FB_ServerDataExcha :    . LANZANDO NUEVA LECTURA ... ', hSocket );
+			IF bExecute THEN
+				fbSocketReceive( bExecute := TRUE );
+			ELSE
+				eStep := DATAEXCHA_STATE_IDLE;
+			END_IF		
+		END_IF
+
+	DATAEXCHA_STATE_SEND_START:	//(*SI usamos envio de datos*) 2020_04_02
+		FOR a:=0 TO MAX_PLCPRJ_TXBUFFER_SIZE-1 DO
+			txBuffer[a] := GR55_dataSND[a];
+		END_FOR
+		fbSocketSend( bExecute := FALSE );
+		fbSocketSend( hSocket  	:= hSocket
+					  ,pSrc	  	:= ADR(txBuffer)
+					  ,cbLen	:= SIZEOF(txBuffer)
+					  ,bExecute := TRUE
+					  );
+			
+		eStep := DATAEXCHA_STATE_SEND_WAIT;
+		LogMessage( '  3) FB_ServerDataExcha : >3 ENVIANDO DATOS : FB_SocketSend ...', hSocket );
+
+	DATAEXCHA_STATE_SEND_WAIT:
+		fbSocketSend( bExecute := FALSE );
+		IF NOT fbSocketSend.bBusy THEN
+			IF NOT fbSocketSend.bError THEN
+				//bBusy := FALSE;
+				LogMessage( '    . OK', hSocket );
+				IF bExecute THEN
+					eStep := DATAEXCHA_STATE_RECEIVE_START;		//Si tenemos intenciones de seguir recibiendo datos
+					//eStep := DATAEXCHA_STATE_IDLE;			//Si no tenemos intención mas que recibir una trama
+				ELSE
+					eStep := DATAEXCHA_STATE_IDLE;
+				END_IF
+			ELSE
+				LogError( '    . ERROR!! .errorID=',  fbSocketSend.nErrId );
+				nErrId := fbSocketSend.nErrId;
+				udErrId_Intern := 2;	//2 - Error en el envio de datos. Ver error id.
+				eStep := DATAEXCHA_STATE_ERROR;
+			END_IF
+		END_IF
+
+	DATAEXCHA_STATE_ERROR:
+		//bBusy := FALSE;
+		bError := TRUE;
+		nErrId := nErrId;
+		cbReceived := 0;
+		CASE udErrId_Intern OF
+			1:
+				IF bFlags.0 = FALSE THEN
+					bFlags.0 := TRUE;
+					LogError( '  1 - Cliente ha desconectado. Ver error id. FB_SocketReceive:', nErrId );
+				END_IF
+			2:
+				IF bFlags.0 = FALSE THEN
+					bFlags.0 := TRUE;
+					LogError( '  2 - Error en el envio de datos. Ver error id. FB_SocketSend:', nErrId );
+				END_IF
+		END_CASE
+		IF bReset OR bExecute = FALSE THEN
+			eStep := DATAEXCHA_STATE_IDLE;
+			bFlags := 0;
+		END_IF;
+
+END_CASE]]></ST>
+    </Implementation>
+    <LineIds Name="FB_ServerDataExcha">
+      <LineId Id="43" Count="0" />
+      <LineId Id="259" Count="5" />
+      <LineId Id="411" Count="0" />
+      <LineId Id="266" Count="1" />
+      <LineId Id="44" Count="0" />
+      <LineId Id="528" Count="0" />
+      <LineId Id="268" Count="0" />
+      <LineId Id="46" Count="0" />
+      <LineId Id="337" Count="1" />
+      <LineId Id="412" Count="0" />
+      <LineId Id="56" Count="7" />
+      <LineId Id="255" Count="0" />
+      <LineId Id="64" Count="2" />
+      <LineId Id="254" Count="0" />
+      <LineId Id="67" Count="7" />
+      <LineId Id="76" Count="0" />
+      <LineId Id="421" Count="0" />
+      <LineId Id="418" Count="0" />
+      <LineId Id="256" Count="0" />
+      <LineId Id="417" Count="0" />
+      <LineId Id="419" Count="0" />
+      <LineId Id="422" Count="1" />
+      <LineId Id="420" Count="0" />
+      <LineId Id="80" Count="0" />
+      <LineId Id="82" Count="1" />
+      <LineId Id="209" Count="0" />
+      <LineId Id="85" Count="2" />
+      <LineId Id="416" Count="0" />
+      <LineId Id="88" Count="0" />
+      <LineId Id="570" Count="2" />
+      <LineId Id="413" Count="0" />
+      <LineId Id="89" Count="2" />
+      <LineId Id="93" Count="2" />
+      <LineId Id="171" Count="3" />
+      <LineId Id="247" Count="0" />
+      <LineId Id="249" Count="0" />
+      <LineId Id="248" Count="0" />
+      <LineId Id="424" Count="0" />
+      <LineId Id="432" Count="0" />
+      <LineId Id="258" Count="0" />
+      <LineId Id="372" Count="0" />
+      <LineId Id="116" Count="1" />
+      <LineId Id="425" Count="1" />
+      <LineId Id="428" Count="0" />
+      <LineId Id="427" Count="0" />
+      <LineId Id="441" Count="1" />
+      <LineId Id="445" Count="0" />
+      <LineId Id="443" Count="1" />
+      <LineId Id="128" Count="4" />
+      <LineId Id="615" Count="0" />
+      <LineId Id="133" Count="2" />
+      <LineId Id="433" Count="0" />
+      <LineId Id="608" Count="4" />
+      <LineId Id="136" Count="2" />
+      <LineId Id="563" Count="0" />
+      <LineId Id="565" Count="1" />
+      <LineId Id="139" Count="0" />
+      <LineId Id="483" Count="0" />
+      <LineId Id="485" Count="3" />
+      <LineId Id="484" Count="0" />
+      <LineId Id="144" Count="0" />
+      <LineId Id="252" Count="0" />
+      <LineId Id="145" Count="5" />
+      <LineId Id="438" Count="0" />
+      <LineId Id="434" Count="0" />
+      <LineId Id="437" Count="0" />
+      <LineId Id="529" Count="0" />
+      <LineId Id="439" Count="1" />
+      <LineId Id="436" Count="0" />
+      <LineId Id="152" Count="2" />
+      <LineId Id="616" Count="0" />
+      <LineId Id="155" Count="6" />
+      <LineId Id="613" Count="0" />
+      <LineId Id="162" Count="0" />
+      <LineId Id="617" Count="1" />
+      <LineId Id="622" Count="1" />
+      <LineId Id="625" Count="0" />
+      <LineId Id="624" Count="0" />
+      <LineId Id="620" Count="0" />
+      <LineId Id="626" Count="3" />
+      <LineId Id="619" Count="0" />
+      <LineId Id="530" Count="0" />
+      <LineId Id="163" Count="0" />
+      <LineId Id="630" Count="0" />
+      <LineId Id="531" Count="0" />
+      <LineId Id="164" Count="0" />
+      <LineId Id="9" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

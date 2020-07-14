@@ -1,0 +1,84 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.3">
+  <POU Name="MAIN_TCP" Id="{f90a88f7-c38f-4499-8154-44cceb8647d5}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM MAIN_TCP
+VAR
+	//TCP/IP Comunicacion
+	s_IP			: STRING(15) := '192.168.1.138';
+	udi_Port		: UDINT := 2000;
+	fbServer 		: Fagor_ServidorLocalTCP;
+	bEnableServer	: BOOL;
+	
+	fbSocketCloseAll: FB_SocketCloseAll;
+	bCloseAll 		: BOOL;
+
+	bResetGeneral: BOOL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[// CONTROL DEL SERVIDOR
+bEnableServer 		:= bEnableServer;		//Habilitar servidor
+s_IP 				:= s_IP;				//IP local de la máquina (en caso de ser servidor).
+udi_Port			:= udi_Port;			//Puerto local de la máquina (en caso de ser servidor)
+G_bLogDebugMessages := G_bLogDebugMessages;	//Mostrar mensajes de debug en la consola
+G_bLogErrorMessages	:= G_bLogErrorMessages;	//Mostrar mensajes de error en la consola
+
+// RESET
+bResetGeneral := bResetGeneral;
+
+// CERRAR TODAS LAS CONEXIONES
+bCloseAll := bCloseAll;
+
+IF bCloseAll THEN 
+	fbSocketCloseAll( 
+					bExecute	:= TRUE
+					,sSrvNetId 	:= ''
+					,tTimeout 	:= T#3S 
+					);
+	IF NOT fbSocketCloseAll.bBusy THEN
+		IF NOT fbSocketCloseAll.bError THEN
+			bCloseAll := FALSE;
+		ELSE
+			fbSocketCloseAll(bExecute := TRUE );			
+		END_IF
+	END_IF
+END_IF
+fbSocketCloseAll( bExecute:= FALSE );
+
+IF NOT fbSocketCloseAll.bBusy THEN
+	fbServer( 	bEnable 	:= bEnableServer
+				,sLocalHost := s_IP
+				,nLocalPort := udi_Port
+				,bReset 	:= bResetGeneral );
+END_IF
+bResetGeneral := FALSE;]]></ST>
+    </Implementation>
+    <LineIds Name="MAIN_TCP">
+      <LineId Id="119" Count="1" />
+      <LineId Id="152" Count="0" />
+      <LineId Id="154" Count="1" />
+      <LineId Id="173" Count="0" />
+      <LineId Id="175" Count="0" />
+      <LineId Id="121" Count="1" />
+      <LineId Id="153" Count="0" />
+      <LineId Id="124" Count="1" />
+      <LineId Id="172" Count="0" />
+      <LineId Id="78" Count="0" />
+      <LineId Id="80" Count="0" />
+      <LineId Id="158" Count="3" />
+      <LineId Id="163" Count="0" />
+      <LineId Id="166" Count="0" />
+      <LineId Id="164" Count="0" />
+      <LineId Id="167" Count="2" />
+      <LineId Id="165" Count="0" />
+      <LineId Id="83" Count="0" />
+      <LineId Id="171" Count="0" />
+      <LineId Id="111" Count="0" />
+      <LineId Id="85" Count="1" />
+      <LineId Id="156" Count="1" />
+      <LineId Id="117" Count="0" />
+      <LineId Id="77" Count="0" />
+      <LineId Id="127" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>
