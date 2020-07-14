@@ -1,0 +1,501 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.3">
+  <POU Name="GR55_MovileBolsters_MAIN" Id="{78a8ea56-a541-4945-8498-255ff3fb0a40}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM GR55_MovileBolsters_MAIN
+VAR
+//FBs del Eje	
+	fb_HabilitarMesa : MC_Power;
+	fb_MoverVelocidad : MC_MoveVelocity;
+	fb_Direccion : MC_Direction;
+	fb_Paro : MC_Halt;
+	fb_HabilitarMesa2 : MC_Power;
+	fb_MoverVelocidad2 : MC_MoveVelocity;
+	fb_Direccion2 : MC_Direction;
+	fb_Paro2 : MC_Halt;
+	fb_ReducirEntrar : MC_MoveVelocity;
+	fb_ReducirEntrar2 : MC_MoveVelocity;
+	fb_ReducirSalir : MC_MoveVelocity;
+	fb_ReducirSalir2 : MC_MoveVelocity;
+	fb_Buffer : MC_BufferMode;
+	fb_Buffer2 : MC_BufferMode;
+//Variables
+	//Inputs
+	I_bHabilitar : BOOL;
+	I_bMover : BOOL;
+	I_lrVelocidad : LREAL;
+	I_bParar : BOOL;
+	I_bHabilitar2 : BOOL;
+	I_bMover2 : BOOL;
+	I_lrVelocidad2 : LREAL;
+	I_bParar2 : BOOL;
+	I_lrReduccion : LREAL;
+	I_lrReduccion2 : LREAL;
+	I_lrFrenado : LREAL;
+	I_lrFrenado2 : LREAL;
+	I_bReducir : BOOL;
+	I_bReducir2 : BOOL;
+	I_bFrenar : BOOL;
+	I_bFrenar2 : BOOL;
+	I_Cambio : BOOL;
+	I_Cambio2 : BOOL;
+	//Outputs
+	O_bHabilitado : BOOL;
+	O_bHabilitando : BOOL;
+	O_bErrorH : BOOL;
+	O_bMoviendo : BOOL;
+	O_bErrorM : BOOL;
+	O_bParado : BOOL;
+	O_bParando : BOOL;
+	O_bErrorP : BOOL;
+	O_bHabilitado2 : BOOL;
+	O_bHabilitando2 : BOOL;
+	O_bErrorH2 : BOOL;
+	O_bMoviendo2 : BOOL;
+	O_bErrorM2 : BOOL;
+	O_bParado2 : BOOL;
+	O_bParando2 : BOOL;
+	O_bErrorP2 : BOOL;
+	//Otras variables
+	Habilitar : BOOL;
+	Caso : INT; 
+	lrPosicionActual : LREAL;
+	lrPosicionActual2 : LREAL;
+	Dentro : BOOL;
+	Dentro2 : BOOL;
+	Origen : BOOL;
+	Origen2 : BOOL;
+	Reducir : BOOL;
+	Reducir2 : BOOL;
+	RedSalir : BOOL;
+	RedSalir2 : BOOL;
+	VelocidadSetPoint : DINT;
+	VelocidadSetPoint2 : DINT;
+	DVelocidadSetPoint : DINT;
+	DVelocidadSetPoint2: DINT;
+	x : LREAL;
+	x0 : LREAL;
+	x2 : LREAL;
+	x20 : LREAL;
+	//Auxiliares
+	rTrig : R_TRIG;
+	rTrig2 : R_TRIG;
+	rTrig3 : R_TRIG;
+	rTrig4 : R_TRIG;
+	rTrig5 : R_TRIG;
+	rTrig6 : R_TRIG;
+	rTrig7 : R_TRIG;
+	rTrig8 : R_TRIG;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[//PANEL MOVIL RETIRADO
+GVL_B2P.GR55_Bolster.MovBolster_General.bMovingPanelRetired := TRUE;
+
+//MESAS EN ORIGEN
+GVL_B2P.GR55_Bolster.MovBolster1.bMoveBolster_Out			:= NOT Origen;
+GVL_B2P.GR55_Bolster.MovBolster2.bMoveBolster_Out			:= NOT Origen2;
+
+//MESA 1 EN PRENSA
+GVL_B2P.GR55_Bolster.MovBolster1.bMoveBolster_InPrs 		:= Dentro;
+
+//MESA 2 EN PRENSA
+GVL_B2P.GR55_Bolster.MovBolster2.bMoveBolster_InPrs 		:= Dentro2;
+
+//SENSOR TERMICO MESAS
+GVL_B2P.GR55_Bolster.MovBolster1.bThermalSensor_Motor 		:= TRUE;
+GVL_B2P.GR55_Bolster.MovBolster2.bThermalSensor_Motor 		:= TRUE;
+
+//TERMICO DEL DRIVE DE LAS MESAS
+GVL_B2P.GR55_Bolster.MovBolster1.bThBr_SupplyDrive			:= TRUE;
+GVL_B2P.GR55_Bolster.MovBolster2.bThBr_SupplyDrive			:= TRUE;
+
+//MESAS EN POSICION DE REDUCIR
+GVL_B2P.GR55_Bolster.MovBolster1.bMoveBolster_SpeedCh		:= NOT Reducir AND NOT RedSalir;	
+GVL_B2P.GR55_Bolster.MovBolster2.bMoveBolster_SpeedCh		:= NOT Reducir2 AND NOT RedSalir2;
+
+//CONVERSION DE LA CONSIGNA DEL PLC A m/s
+VelocidadSetPoint := INT_TO_DINT(GVL_P2B.GR55_Bolster.stSINA_Prof_WRITE_Drive.iSpeed_SP)*200/32768;
+GVL_B2P.GR55_Bolster.stSINA_Prof_READ_Drive.iSpeed_Act := LREAL_TO_INT(GVL_AXIS.st_EjeCASE.NcToPlc.ActVelo*32768/200);
+VelocidadSetPoint2 := INT_TO_DINT(GVL_P2B.GR55_Bolster.stSINA_Prof_WRITE_Drive_2.iSpeed_SP)*200/32768;
+GVL_B2P.GR55_Bolster.stSINA_Prof_READ_Drive_2.iSpeed_Act := LREAL_TO_INT(GVL_AXIS.st_SegundoEje.NcToPlc.ActVelo*32768/200);
+
+//MESAS CONECTADAS
+GVL_B2P.GR55_Bolster.MovBolster1.bMoveBolster_Connected := TRUE;
+GVL_B2P.GR55_Bolster.MovBolster2.bMoveBolster_Connected := TRUE;
+
+//DRIVE SINAMICS MESA 1
+GVL_B2P.GR55_Bolster.stSINA_Prof_READ_Drive.bRdyToSwitch_ON := NOT GVL_B2P.GR55_Bolster.stSINA_Prof_READ_Drive.bFault AND 
+																	GVL_P2B.GR55_Bolster.MovBolster1.bSupplyDriveContactor AND
+																	GVL_P2B.GR55_Bolster.MovBolster1.bMotorContactor AND
+																	GVL_P2B.GR55_Bolster.MovBolster1.bMoveBolsterBrake;
+																	
+GVL_B2P.GR55_Bolster.stSINA_Prof_READ_Drive.bOFF_2 			:= NOT GVL_P2B.GR55_Bolster.stSINA_Prof_WRITE_Drive.bOFF2;
+GVL_B2P.GR55_Bolster.stSINA_Prof_READ_Drive.bOFF_3			:= NOT GVL_P2B.GR55_Bolster.stSINA_Prof_WRITE_Drive.bOFF3;
+
+//DRIVE SINAMICS MESA 2
+GVL_B2P.GR55_Bolster.stSINA_Prof_READ_Drive_2.bRdyToSwitch_ON := NOT GVL_B2P.GR55_Bolster.stSINA_Prof_READ_Drive_2.bFault AND 
+																	GVL_P2B.GR55_Bolster.MovBolster2.bSupplyDriveContactor AND
+																	GVL_P2B.GR55_Bolster.MovBolster2.bMotorContactor AND
+																	GVL_P2B.GR55_Bolster.MovBolster2.bMoveBolsterBrake;
+																	
+GVL_B2P.GR55_Bolster.stSINA_Prof_READ_Drive_2.bOFF_2 			:= NOT GVL_P2B.GR55_Bolster.stSINA_Prof_WRITE_Drive_2.bOFF2;
+GVL_B2P.GR55_Bolster.stSINA_Prof_READ_Drive_2.bOFF_3			:= NOT GVL_P2B.GR55_Bolster.stSINA_Prof_WRITE_Drive_2.bOFF3;
+
+
+//???????????????
+IF 	GVL_P2B.GR55_Bolster.stSINA_Prof_WRITE_Drive.bOperationEnable AND
+ 	GVL_P2B.GR55_Bolster.stSINA_Prof_WRITE_Drive.bRampGeneratorEnable AND
+	GVL_P2B.GR55_Bolster.stSINA_Prof_WRITE_Drive.bRampGeneratorStart AND
+	GVL_P2B.GR55_Bolster.stSINA_Prof_WRITE_Drive.bSpeedSetPointEnable THEN
+	;
+END_IF
+//CONDICIONES MESA 1
+IF GVL_P2B.GR55_Bolster.stSINA_Prof_WRITE_Drive.bReset	=TRUE THEN
+	GVL_B2P.GR55_Bolster.stSINA_Prof_READ_Drive.bFault := FALSE;
+END_IF
+
+IF GVL_P2B.GR55_Bolster.MovBolster1.bMotorContactor = TRUE THEN
+	GVL_B2P.GR55_Bolster.MovBolster1.bDriveReady := TRUE;
+END_IF
+//CONDICIONES MESA 2
+IF GVL_P2B.GR55_Bolster.stSINA_Prof_WRITE_Drive_2.bReset	=TRUE THEN
+	GVL_B2P.GR55_Bolster.stSINA_Prof_READ_Drive_2.bFault := FALSE;
+END_IF
+
+IF GVL_P2B.GR55_Bolster.MovBolster2.bMotorContactor = TRUE THEN
+	GVL_B2P.GR55_Bolster.MovBolster2.bDriveReady := TRUE;
+END_IF
+
+//DIRECCION DE LAS MESAS MOVILES
+IF VelocidadSetPoint >= 0  THEN
+	fb_Direccion := MC_Positive_Direction;
+ELSIF VelocidadSetPoint < 0  THEN
+	fb_Direccion := MC_Negative_Direction;;
+END_IF
+IF VelocidadSetPoint2 <= 0  THEN
+	fb_Direccion2 := MC_Positive_Direction;
+ELSIF VelocidadSetPoint2 > 0  THEN
+	fb_Direccion2 := MC_Negative_Direction;;
+END_IF
+
+//CAMBIOS DE VELOCIDAD
+IF VelocidadSetPoint <> DVelocidadSetPoint THEN
+	I_Cambio := TRUE;
+ELSE
+	I_Cambio := FALSE;
+END_IF
+DVelocidadSetPoint := VelocidadSetPoint;
+
+IF VelocidadSetPoint2 <> DVelocidadSetPoint2 THEN
+	I_Cambio2 := TRUE;
+ELSE
+	I_Cambio2 := FALSE;
+END_IF
+DVelocidadSetPoint2 := VelocidadSetPoint2;
+
+//HABILITAR Y SELECCIONAR (SE MANTIENE COMO ESTABA)
+IF Habilitar = TRUE THEN
+	I_bHabilitar := TRUE;
+	I_bHabilitar2 := TRUE;
+ELSE 
+	I_bHabilitar := FALSE;
+	I_bHabilitar2 := FALSE;
+END_IF
+
+//REDUCCION DE LA VELOCIDAD LLEGANDO A ORIGEN
+IF x < 70 THEN
+	RedSalir := TRUE;
+ELSE
+	RedSalir := FALSE;
+END_IF
+
+IF x2 > -70 THEN
+	RedSalir2 := TRUE;
+ELSE
+	RedSalir2 := FALSE;
+END_IF
+
+//MESAS EN PRENSA
+IF x >= 685 THEN
+	Dentro := TRUE;
+ELSE
+	Dentro := FALSE;
+END_IF
+
+IF x2 <= -685 THEN
+	Dentro2 := TRUE;
+ELSE
+	Dentro2 := FALSE;
+END_IF
+
+//REDUCCION DE LA VELOCIDAD ENTRANDO EN PRENSA
+IF x >= 620 THEN
+	Reducir := TRUE;
+ELSE
+	Reducir := FALSE;
+END_IF
+IF x2 <=-620 THEN
+	Reducir2 := TRUE;
+ELSE
+	Reducir2 := FALSE; 
+END_IF
+
+//MESAS EN ORIGEN
+IF x <= 5 THEN
+	Origen := TRUE;
+ELSE
+	Origen := FALSE;
+END_IF
+IF x2 >= -5 THEN
+	Origen2 := TRUE;
+ELSE
+	Origen2 := FALSE;
+END_IF
+
+//CASOS
+IF (GVL_P2B.GR55_Bolster.MovBolster1.bSupplyDriveContactor = TRUE AND 
+	GVL_P2B.GR55_Bolster.MovBolster1.bMotorContactor = TRUE AND 
+	GVL_P2B.GR55_Bolster.MovBolster1.bMoveBolsterBrake = TRUE AND 
+	GVL_P2B.GR55_Bolster.stSINA_Prof_WRITE_Drive.bON_OFF1 = TRUE) THEN
+	Caso := 1;
+ELSIF (GVL_P2B.GR55_Bolster.MovBolster2.bSupplyDriveContactor = TRUE AND 
+		GVL_P2B.GR55_Bolster.MovBolster2.bMotorContactor = TRUE AND 
+		GVL_P2B.GR55_Bolster.MovBolster2.bMoveBolsterBrake = TRUE AND 
+		GVL_P2B.GR55_Bolster.stSINA_Prof_WRITE_Drive_2.bON_OFF1 = TRUE) THEN
+	Caso := 2;
+ELSE 
+	Caso := 3;
+END_IF
+
+//MAQUINA DE ESTADOS
+CASE Caso OF
+	1:	I_bParar := FALSE;
+		I_bMover := TRUE;
+		I_lrVelocidad := ABS(VelocidadSetPoint);
+	
+	2:	I_bParar2 := FALSE;
+		I_bMover2 := TRUE;
+		I_lrVelocidad2 := ABS(VelocidadSetPoint2);
+		
+	3: I_bMover := FALSE;
+	I_bMover2 := FALSE;
+	I_bParar := TRUE;
+	I_bParar2 := TRUE;
+	I_bFrenar:= FALSE;
+	I_bFrenar2:= FALSE;
+	I_bReducir := FALSE;
+	I_bReducir2 := FALSE;
+	I_lrVelocidad := 0;
+ELSE
+	;
+END_CASE
+
+//Posicion Mesa 1 en Cruce (Integrando la velocidad)
+IF x > 690 THEN
+	x0 := 690.000000000000000000000;
+	x := 690.000000000000000000000;
+ELSIF x <= 690 THEN
+	x := x0 + (GVL_AXIS.st_EjeCASE.NcToPlc.ActVelo * 0.01);
+	x0 := x ;	
+END_IF
+//Posicion Mesa 2 en Cruce (Integrando la velocidad)
+IF x2 < -690 THEN
+	x20 := -690.000000000000000000000;
+	x2 := -690.000000000000000000000;
+ELSIF x >= -690 THEN
+	x2 := x20 + (GVL_AXIS.st_SegundoEje.NcToPlc.ActVelo * 0.01);
+	x20 := x2 ;	
+END_IF
+
+lrPosicionActual := GVL_AXIS.st_EjeCASE.NcToPlc.ActPos;
+lrPosicionActual2 := GVL_AXIS.st_SegundoEje.NcToPlc.ActPos;
+
+//GENERACIÓN DE PULSOS
+rTrig(CLK := I_bMover);
+rTrig2 (CLK := I_bParar);
+rTrig3(CLK := I_bMover2);
+rTrig4 (CLK := I_bParar2);
+rTrig7(CLK := I_Cambio);
+rTrig8 (CLK := I_Cambio2);
+//FUNCIONES MESA 1 Y MESA 2	
+fb_HabilitarMesa(
+	Axis := GVL_AXIS.st_EjeCASE
+	,Enable := I_bHabilitar OR GR55_MovileBolsters_CROSS.I_bHabilitar
+	,Enable_Positive := TRUE
+	,Enable_Negative := TRUE
+	,Override := 100
+	,Status => O_bHabilitado
+	,Busy => O_bHabilitando
+	,Error => O_bErrorH
+	);
+fb_MoverVelocidad(
+	Axis := GVL_AXIS.st_EjeCASE
+	,Execute := rTrig.Q OR rTrig7.Q
+	,Velocity := I_lrVelocidad
+	,Acceleration := 100
+	,Deceleration := 100
+	,Jerk := 1000
+	,InVelocity => O_bMoviendo
+	,Error => O_bErrorM
+	,Direction := fb_Direccion
+	,BufferMode := fb_Buffer
+	);
+fb_Paro(
+	Axis := GVL_AXIS.st_EjeCASE
+	,Execute:= rTrig2.Q
+	,Deceleration := 100
+	,Jerk := 1000
+	,Done => O_bParado
+	,Busy => O_bParando
+	,Error => O_bErrorP
+	);
+fb_HabilitarMesa2(
+	Axis := GVL_AXIS.st_SegundoEje
+	,Enable := I_bHabilitar2 OR GR55_MovileBolsters_CROSS.I_bHabilitar2
+	,Enable_Positive := TRUE
+	,Enable_Negative := TRUE
+	,Override := 100
+	,Status => O_bHabilitado2
+	,Busy => O_bHabilitando2
+	,Error => O_bErrorH2
+	);
+fb_MoverVelocidad2(
+	Axis := GVL_AXIS.st_SegundoEje
+	,Execute := rTrig3.Q OR rTrig8.Q
+	,Velocity := I_lrVelocidad2
+	,Acceleration := 100
+	,Deceleration := 100
+	,Jerk := 1000
+	,InVelocity => O_bMoviendo2
+	,Error => O_bErrorM2
+	,Direction := fb_Direccion2
+	,BufferMode := fb_Buffer2
+	);
+fb_Paro2(
+	Axis := GVL_AXIS.st_SegundoEje
+	,Execute:= rTrig4.Q
+	,Deceleration := 100
+	,Jerk := 1000
+	,Done => O_bParado2
+	,Busy => O_bParando2
+	,Error => O_bErrorP2
+	);
+	]]></ST>
+    </Implementation>
+    <LineIds Name="GR55_MovileBolsters_MAIN">
+      <LineId Id="1928" Count="18" />
+      <LineId Id="484" Count="0" />
+      <LineId Id="1886" Count="0" />
+      <LineId Id="583" Count="0" />
+      <LineId Id="581" Count="1" />
+      <LineId Id="1884" Count="1" />
+      <LineId Id="589" Count="0" />
+      <LineId Id="594" Count="0" />
+      <LineId Id="1207" Count="0" />
+      <LineId Id="1206" Count="0" />
+      <LineId Id="1881" Count="2" />
+      <LineId Id="1880" Count="0" />
+      <LineId Id="1877" Count="0" />
+      <LineId Id="586" Count="0" />
+      <LineId Id="563" Count="0" />
+      <LineId Id="764" Count="1" />
+      <LineId Id="767" Count="0" />
+      <LineId Id="1878" Count="0" />
+      <LineId Id="564" Count="1" />
+      <LineId Id="1876" Count="0" />
+      <LineId Id="1217" Count="0" />
+      <LineId Id="1211" Count="3" />
+      <LineId Id="1879" Count="0" />
+      <LineId Id="1216" Count="0" />
+      <LineId Id="1208" Count="2" />
+      <LineId Id="566" Count="0" />
+      <LineId Id="568" Count="1" />
+      <LineId Id="571" Count="2" />
+      <LineId Id="570" Count="0" />
+      <LineId Id="574" Count="3" />
+      <LineId Id="864" Count="0" />
+      <LineId Id="850" Count="0" />
+      <LineId Id="865" Count="1" />
+      <LineId Id="1219" Count="6" />
+      <LineId Id="1218" Count="0" />
+      <LineId Id="1008" Count="0" />
+      <LineId Id="580" Count="0" />
+      <LineId Id="851" Count="1" />
+      <LineId Id="854" Count="2" />
+      <LineId Id="1313" Count="3" />
+      <LineId Id="1312" Count="0" />
+      <LineId Id="1875" Count="0" />
+      <LineId Id="578" Count="0" />
+      <LineId Id="1328" Count="1" />
+      <LineId Id="1331" Count="1" />
+      <LineId Id="1330" Count="0" />
+      <LineId Id="1333" Count="0" />
+      <LineId Id="1341" Count="0" />
+      <LineId Id="1336" Count="4" />
+      <LineId Id="1335" Count="0" />
+      <LineId Id="1642" Count="0" />
+      <LineId Id="6" Count="7" />
+      <LineId Id="1874" Count="0" />
+      <LineId Id="14" Count="0" />
+      <LineId Id="867" Count="1" />
+      <LineId Id="870" Count="0" />
+      <LineId Id="873" Count="0" />
+      <LineId Id="869" Count="0" />
+      <LineId Id="879" Count="0" />
+      <LineId Id="875" Count="3" />
+      <LineId Id="874" Count="0" />
+      <LineId Id="1873" Count="0" />
+      <LineId Id="1095" Count="0" />
+      <LineId Id="15" Count="3" />
+      <LineId Id="1534" Count="0" />
+      <LineId Id="880" Count="0" />
+      <LineId Id="20" Count="4" />
+      <LineId Id="1872" Count="0" />
+      <LineId Id="41" Count="10" />
+      <LineId Id="886" Count="0" />
+      <LineId Id="52" Count="10" />
+      <LineId Id="1871" Count="0" />
+      <LineId Id="63" Count="1" />
+      <LineId Id="895" Count="2" />
+      <LineId Id="65" Count="1" />
+      <LineId Id="899" Count="2" />
+      <LineId Id="67" Count="0" />
+      <LineId Id="72" Count="2" />
+      <LineId Id="1870" Count="0" />
+      <LineId Id="75" Count="2" />
+      <LineId Id="80" Count="1" />
+      <LineId Id="88" Count="0" />
+      <LineId Id="94" Count="0" />
+      <LineId Id="97" Count="1" />
+      <LineId Id="1317" Count="0" />
+      <LineId Id="122" Count="7" />
+      <LineId Id="1775" Count="0" />
+      <LineId Id="130" Count="2" />
+      <LineId Id="1869" Count="0" />
+      <LineId Id="135" Count="0" />
+      <LineId Id="1664" Count="0" />
+      <LineId Id="1670" Count="0" />
+      <LineId Id="1673" Count="0" />
+      <LineId Id="1665" Count="0" />
+      <LineId Id="1669" Count="0" />
+      <LineId Id="1666" Count="1" />
+      <LineId Id="1682" Count="0" />
+      <LineId Id="1675" Count="3" />
+      <LineId Id="1684" Count="2" />
+      <LineId Id="1868" Count="0" />
+      <LineId Id="1866" Count="0" />
+      <LineId Id="1865" Count="0" />
+      <LineId Id="1867" Count="0" />
+      <LineId Id="1687" Count="0" />
+      <LineId Id="136" Count="3" />
+      <LineId Id="142" Count="1" />
+      <LineId Id="1864" Count="0" />
+      <LineId Id="144" Count="19" />
+      <LineId Id="2032" Count="0" />
+      <LineId Id="165" Count="29" />
+      <LineId Id="2034" Count="0" />
+      <LineId Id="196" Count="9" />
+      <LineId Id="1776" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>
